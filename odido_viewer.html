@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Odido Account Dump Viewer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+
+  header {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border-bottom: 2px solid #334155;
+    padding: 16px 24px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.25rem; font-weight: 700; color: #f1f5f9; }
+  .badge { background: #ef4444; color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.5px; }
+  .subtitle { font-size: 0.78rem; color: #64748b; margin-left: auto; }
+
+  /* ---- Import bar ---- */
+  .import-bar {
+    background: #131b2e; border-bottom: 1px solid #2d3748;
+    padding: 12px 24px; display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
+  }
+  .import-label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 700; white-space: nowrap; padding-top: 10px; }
+
+  .drop-zone {
+    flex: 1; min-width: 240px; max-width: 420px;
+    border: 2px dashed #334155; border-radius: 8px;
+    padding: 10px 16px; display: flex; align-items: center; gap: 10px;
+    cursor: pointer; transition: border-color 0.2s, background 0.2s; position: relative;
+  }
+  .drop-zone:hover, .drop-zone.over { border-color: #3b82f6; background: #1a2844; }
+  .drop-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .drop-icon { font-size: 1.4rem; flex-shrink: 0; }
+  .drop-text { font-size: 0.8rem; color: #94a3b8; }
+  .drop-text strong { color: #60a5fa; }
+  .drop-text small { display: block; color: #475569; font-size: 0.7rem; margin-top: 2px; line-height: 1.4; }
+
+  /* File queue */
+  .queue-wrap { flex: 1; min-width: 200px; }
+  .queue-header { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
+  .queue-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow-y: auto; }
+  .q-item {
+    display: flex; align-items: center; gap: 8px;
+    background: #1e293b; border-radius: 6px; padding: 5px 10px; font-size: 0.76rem;
+  }
+  .q-item .q-name { flex: 1; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .q-item .q-size { color: #475569; font-size: 0.7rem; white-space: nowrap; }
+  .q-item .q-status { font-size: 0.7rem; white-space: nowrap; }
+  .q-item.pending  .q-status { color: #64748b; }
+  .q-item.loading  .q-status { color: #fbbf24; }
+  .q-item.done     .q-status { color: #34d399; }
+  .q-item.error    .q-status { color: #f87171; }
+  .q-rm { cursor: pointer; color: #475569; flex-shrink: 0; }
+  .q-rm:hover { color: #f87171; }
+
+  /* Progress */
+  .progress-col { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 8px; }
+  .progress-item { }
+  .progress-lbl { font-size: 0.7rem; color: #64748b; margin-bottom: 3px; display: flex; justify-content: space-between; }
+  .progress-bg { background: #1e293b; border-radius: 3px; height: 5px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #818cf8); border-radius: 3px; transition: width 0.15s; width: 0%; }
+  .progress-fill.done { background: #34d399; }
+
+  .import-actions { display: flex; flex-direction: column; gap: 6px; justify-content: flex-start; padding-top: 2px; }
+
+  /* ---- Buttons ---- */
+  .btn {
+    background: #3b82f6; color: white; border: none; padding: 8px 16px;
+    border-radius: 6px; cursor: pointer; font-size: 0.82rem; font-weight: 600;
+    transition: background 0.15s; white-space: nowrap;
+  }
+  .btn:hover { background: #2563eb; }
+  .btn.sec { background: #374151; }
+  .btn.sec:hover { background: #4b5563; }
+  .btn.danger { background: #7f1d1d; }
+  .btn.danger:hover { background: #991b1b; }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* ---- Toolbar ---- */
+  .toolbar {
+    background: #1e293b; border-bottom: 1px solid #2d3748;
+    padding: 12px 24px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+  }
+  .fg { display: flex; flex-direction: column; gap: 3px; }
+  .fg label { font-size: 0.68rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; }
+  .fg input, .fg select {
+    background: #0f1117; border: 1px solid #334155; color: #e2e8f0;
+    padding: 6px 10px; border-radius: 6px; font-size: 0.82rem; min-width: 150px;
+    outline: none; transition: border-color 0.2s;
+  }
+  .fg input:focus, .fg select:focus { border-color: #3b82f6; }
+  #searchInput { min-width: 240px; }
+
+  /* ---- Stats bar ---- */
+  .stats-bar {
+    background: #1a2234; padding: 7px 24px; font-size: 0.76rem;
+    color: #64748b; border-bottom: 1px solid #2d3748;
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: center; min-height: 34px;
+  }
+  .stats-bar span { color: #94a3b8; }
+  .stats-bar strong { color: #3b82f6; }
+  .stats-bar .live-badge { background: #78350f; color: #fcd34d; padding: 1px 8px; border-radius: 8px; font-size: 0.68rem; font-weight: 700; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  /* Pager */
+  .pager { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .pager button {
+    background: #1e293b; border: 1px solid #334155; color: #94a3b8;
+    padding: 3px 9px; border-radius: 5px; cursor: pointer; font-size: 0.76rem; transition: background 0.15s;
+  }
+  .pager button:hover:not(:disabled) { background: #334155; color: #e2e8f0; }
+  .pager button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .pager button.cur { background: #3b82f6; border-color: #3b82f6; color: white; }
+  .pager .pg-info { font-size: 0.74rem; color: #64748b; }
+
+  /* ---- Empty state ---- */
+  .empty { text-align: center; padding: 80px 24px; color: #4b5563; }
+  .empty .ei { font-size: 3rem; margin-bottom: 14px; opacity: 0.35; }
+  .empty h2 { font-size: 0.95rem; color: #64748b; margin-bottom: 8px; font-weight: 600; }
+  .empty p { font-size: 0.8rem; line-height: 1.6; max-width: 420px; margin: 0 auto; }
+
+  /* ---- Table ---- */
+  .table-wrap { overflow-x: auto; padding: 0 24px 32px; margin-top: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  thead tr { background: #1e293b; position: sticky; top: 0; z-index: 10; }
+  th {
+    padding: 9px 12px; text-align: left; color: #94a3b8; font-weight: 600;
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.4px;
+    white-space: nowrap; cursor: pointer; border-bottom: 2px solid #334155; user-select: none;
+  }
+  th:hover { color: #e2e8f0; }
+  th.ns { cursor: default; }
+  th .sa { margin-left: 3px; opacity: 0.35; font-size: 0.7rem; }
+  th.sorted .sa { opacity: 1; color: #3b82f6; }
+  tbody tr { border-bottom: 1px solid #191f2e; transition: background 0.08s; }
+  tbody tr:hover { background: #1a2234; }
+  td { padding: 8px 12px; vertical-align: middle; white-space: nowrap; max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
+  td.src { color: #475569; font-size: 0.7rem; }
+  .no-res { text-align: center; padding: 60px; color: #4b5563; font-size: 0.85rem; }
+
+  .ba { background: #064e3b; color: #34d399; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
+  .bi { background: #450a0a; color: #f87171; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
+  .bc { background: #1e3a5f; color: #60a5fa; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
+
+  /* ---- Detail panel ---- */
+  .detail-panel {
+    display: none; position: fixed; top: 0; right: 0; width: 480px; height: 100vh;
+    background: #1e293b; border-left: 2px solid #334155; z-index: 100;
+    overflow-y: auto; box-shadow: -10px 0 40px rgba(0,0,0,0.6);
+  }
+  .detail-panel.open { display: block; }
+  .detail-hdr {
+    background: #0f172a; padding: 15px 20px; border-bottom: 1px solid #334155;
+    position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center;
+  }
+  .detail-hdr h2 { font-size: 0.95rem; color: #f1f5f9; }
+  .x-btn { background: none; border: none; color: #94a3b8; font-size: 1.2rem; cursor: pointer; }
+  .x-btn:hover { color: #f1f5f9; }
+  .detail-loading { padding: 40px; text-align: center; color: #64748b; font-size: 0.82rem; }
+  .ds { padding: 11px 20px; border-bottom: 1px solid #263048; }
+  .ds h3 { font-size: 0.68rem; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700; margin-bottom: 9px; }
+  .dr { display: flex; gap: 8px; margin-bottom: 5px; font-size: 0.8rem; }
+  .dk { color: #64748b; min-width: 155px; flex-shrink: 0; font-size: 0.75rem; }
+  .dv { color: #e2e8f0; word-break: break-all; }
+
+  /* ---- SObjectLog timeline ---- */
+  .log-section { padding: 11px 20px; border-bottom: 1px solid #263048; }
+  .log-section h3 { font-size: 0.68rem; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700; margin-bottom: 10px; }
+  .log-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  .log-filter-btn {
+    background: #1e293b; border: 1px solid #334155; color: #94a3b8;
+    padding: 3px 10px; border-radius: 10px; cursor: pointer; font-size: 0.7rem; font-weight: 600;
+    transition: all 0.15s;
+  }
+  .log-filter-btn:hover { border-color: #3b82f6; color: #60a5fa; }
+  .log-filter-btn.active { background: #1e3a5f; border-color: #3b82f6; color: #60a5fa; }
+  .log-count { font-size: 0.68rem; color: #475569; margin-left: auto; }
+
+  .log-timeline { display: flex; flex-direction: column; }
+  .log-entry {
+    display: flex; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid #1a2234; font-size: 0.78rem;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-icon-col { width: 26px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; padding-top: 2px; }
+  .log-icon { font-size: 0.95rem; line-height: 1; }
+  .log-vline { flex: 1; width: 1px; background: #263048; margin-top: 4px; min-height: 12px; }
+  .log-body { flex: 1; min-width: 0; }
+  .log-ts   { font-size: 0.67rem; color: #64748b; margin-bottom: 2px; }
+  .log-meta { font-size: 0.68rem; color: #475569; margin-bottom: 3px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .log-actor-label { color: #64748b; }
+  .log-dir  { font-size: 0.63rem; font-weight: 700; padding: 1px 6px; border-radius: 6px; }
+  .log-dir.inbound  { background: #1e3a5f; color: #60a5fa; }
+  .log-dir.outbound { background: #063a2a; color: #34d399; }
+  .log-msg  { color: #cbd5e1; line-height: 1.45; word-break: break-word; }
+  .log-email { color: #60a5fa; }
+  .log-phone { color: #a78bfa; }
+  .log-tpl   { color: #475569; font-size: 0.7rem; }
+
+  .log-entry.type-email   .log-msg { border-left: 2px solid #3b82f6;   padding-left: 7px; }
+  .log-entry.type-sms     .log-msg { border-left: 2px solid #a855f7;   padding-left: 7px; }
+  .log-entry.type-inbound .log-msg { border-left: 2px solid #f59e0b;   padding-left: 7px; }
+  .log-entry.type-other   .log-msg { border-left: 2px solid #334155;   padding-left: 7px; }
+
+  .log-empty { font-size: 0.78rem; color: #475569; padding: 20px 0; text-align: center; }
+
+  /* ---- Toast ---- */
+  .toast {
+    position: fixed; bottom: 22px; left: 50%;
+    transform: translateX(-50%) translateY(70px);
+    background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+    padding: 10px 18px; font-size: 0.82rem; color: #e2e8f0;
+    z-index: 300; transition: transform 0.25s ease;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5); white-space: nowrap;
+  }
+  .toast.up { transform: translateX(-50%) translateY(0); }
+  .toast.ok { border-color: #065f46; }
+  .toast.er { border-color: #7f1d1d; }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: #0f1117; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Odido Account Dump Viewer</h1>
+  <span class="badge">SENSITIVE</span>
+  <span class="subtitle">Salesforce CRM Export — up to 21 files supported</span>
+</header>
+
+<!-- Import bar -->
+<div class="import-bar">
+  <span class="import-label">Import</span>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" multiple accept=".txt">
+    <span class="drop-icon">📂</span>
+    <div class="drop-text">
+      <strong>Click to select</strong> or drag &amp; drop
+      <small>Only .txt files with "odido" in the name are accepted.<br>Select all 21 files at once — they load one by one automatically.</small>
+    </div>
+  </div>
+
+  <div class="queue-wrap">
+    <div class="queue-header" id="queueHeader">Queue — 0 files</div>
+    <div class="queue-list" id="queueList"></div>
+  </div>
+
+  <div class="progress-col" id="progressCol" style="display:none">
+    <div class="progress-item">
+      <div class="progress-lbl"><span id="curFileName">Idle</span><span id="curPct">0%</span></div>
+      <div class="progress-bg"><div class="progress-fill" id="curBar"></div></div>
+    </div>
+    <div class="progress-item">
+      <div class="progress-lbl"><span>Overall</span><span id="overallPct">0%</span></div>
+      <div class="progress-bg"><div class="progress-fill" id="overallBar"></div></div>
+    </div>
+    <div style="font-size:0.7rem; color:#64748b; margin-top:2px" id="etaLbl"></div>
+  </div>
+
+  <div class="import-actions">
+    <button class="btn" id="loadBtn" onclick="startLoad()" disabled>Load All Files</button>
+    <button class="btn danger" onclick="clearAll()" id="clearBtn" style="display:none">Clear All Data</button>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="toolbar">
+  <div class="fg">
+    <label>Search</label>
+    <input type="text" id="searchInput" placeholder="Name, city, postal code, ID..." oninput="schedFilter()">
+  </div>
+  <div class="fg">
+    <label>Status</label>
+    <select id="fStatus" onchange="applyFilters()"><option value="">All</option></select>
+  </div>
+  <div class="fg">
+    <label>Sales Channel</label>
+    <select id="fChannel" onchange="applyFilters()"><option value="">All</option></select>
+  </div>
+  <div class="fg">
+    <label>City</label>
+    <select id="fCity" onchange="applyFilters()"><option value="">All Cities</option></select>
+  </div>
+  <div class="fg">
+    <label>Year Created</label>
+    <select id="fYear" onchange="applyFilters()"><option value="">All Years</option></select>
+  </div>
+  <div class="fg">
+    <label>Source File</label>
+    <select id="fSource" onchange="applyFilters()"><option value="">All Files</option></select>
+  </div>
+  <button class="btn sec" onclick="resetFilters()">Reset</button>
+</div>
+
+<div class="stats-bar" id="statsBar">
+  <span>No data loaded yet.</span>
+</div>
+
+<div class="empty" id="emptyState">
+  <div class="ei">🗂️</div>
+  <h2>No data loaded yet</h2>
+  <p>Select your Odido dump files using the import bar. You can queue all 21 files at once — they will be streamed and parsed in the background one by one. The table is usable as soon as the first file finishes.</p>
+</div>
+
+<div class="table-wrap" id="tableWrap" style="display:none">
+  <table>
+    <thead>
+      <tr>
+        <th onclick="sortBy('Name')" data-col="Name">Name <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('BillingCity')" data-col="BillingCity">City <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('BillingPostalCode')" data-col="BillingPostalCode">Postal <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('vlocity_cmt__Status__c')" data-col="vlocity_cmt__Status__c">Status <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('Sales_Channel__c')" data-col="Sales_Channel__c">Channel <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('CreatedDate')" data-col="CreatedDate">Created <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('LastModifiedDate')" data-col="LastModifiedDate">Last Modified <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('Brand_Type__c')" data-col="Brand_Type__c">Brand <span class="sa">&#8597;</span></th>
+        <th onclick="sortBy('_source')" data-col="_source">Source File <span class="sa">&#8597;</span></th>
+        <th class="ns">Detail</th>
+      </tr>
+    </thead>
+    <tbody id="tBody"></tbody>
+  </table>
+  <div class="no-res" id="noRes" style="display:none">No records match your filters.</div>
+</div>
+
+<!-- Detail panel -->
+<div class="detail-panel" id="detailPanel">
+  <div class="detail-hdr">
+    <h2 id="dTitle">Account Detail</h2>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="log-filter-btn active" id="tabFields" onclick="switchTab('fields')">Fields</button>
+      <button class="log-filter-btn" id="tabLog" onclick="switchTab('log')">Activity Log</button>
+      <button class="x-btn" onclick="closeDetail()">&#10005;</button>
+    </div>
+  </div>
+  <div id="dContent"></div>
+  <div id="dLog" style="display:none"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  Web Worker (inline blob) — streams file in 4 MB chunks,
+//  parses NDJSON, sends lean records + byte offsets back
+// ============================================================
+const W_SRC = `
+const LEAN_KEYS = ['Id','Name','BillingCity','BillingPostalCode',
+  'vlocity_cmt__Status__c','Sales_Channel__c',
+  'CreatedDate','LastModifiedDate','Brand_Type__c'];
+const CHUNK = 4 * 1024 * 1024;
+const BATCH = 2000;
+const enc   = new TextEncoder();
+
+self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
+  const known = new Set(knownIds);
+  const size  = file.size;
+  let offset  = 0, tail = '', lineBytePos = 0;
+  const batch = [];
+  let totalNew = 0, dups = 0, errs = 0;
+  let lastReport = Date.now();
+
+  while (offset < size) {
+    const slice = file.slice(offset, Math.min(offset + CHUNK, size));
+    const text  = tail + await slice.text();
+    const lines = text.split('\\n');
+    tail = lines.pop(); // incomplete last line, carry forward
+
+    for (const line of lines) {
+      const lineBytes = enc.encode(line + '\\n').length;
+      if (line.trim()) {
+        try {
+          const r = JSON.parse(line);
+          if (r.Id && known.has(r.Id)) {
+            dups++;
+          } else {
+            if (r.Id) known.add(r.Id);
+            const lean = {};
+            for (const k of LEAN_KEYS) lean[k] = r[k] || '';
+            lean._source     = sourceName;
+            lean._byteOffset = lineBytePos;
+            lean._byteLen    = lineBytes - 1;
+            batch.push(lean);
+            totalNew++;
+          }
+        } catch(e) { errs++; }
+        if (batch.length >= BATCH) {
+          self.postMessage({ type:'batch', records: batch.splice(0), totalNew, dups, errs, pct: offset/size });
+        }
+      }
+      lineBytePos += lineBytes;
+    }
+    offset += CHUNK;
+
+    // Throttle progress messages to ~10 per second
+    if (Date.now() - lastReport > 100) {
+      self.postMessage({ type:'progress', pct: Math.min(offset/size, 1), totalNew, dups, errs });
+      lastReport = Date.now();
+    }
+  }
+
+  // Handle last line with no trailing newline
+  if (tail.trim()) {
+    try {
+      const r = JSON.parse(tail);
+      if (!r.Id || !known.has(r.Id)) {
+        if (r.Id) known.add(r.Id);
+        const lean = {};
+        for (const k of LEAN_KEYS) lean[k] = r[k] || '';
+        lean._source     = sourceName;
+        lean._byteOffset = lineBytePos;
+        lean._byteLen    = enc.encode(tail).length;
+        batch.push(lean);
+        totalNew++;
+      } else dups++;
+    } catch(e) { errs++; }
+  }
+
+  if (batch.length) self.postMessage({ type:'batch', records: batch.splice(0), totalNew, dups, errs, pct: 1 });
+  self.postMessage({ type:'done', totalNew, dups, errs });
+};
+`;
+const WORKER_URL = URL.createObjectURL(new Blob([W_SRC], { type: 'application/javascript' }));
+
+// ============================================================
+//  State
+// ============================================================
+const PAGE_SIZE = 250;
+let DATA        = [];       // lean records
+let fileStore   = {};       // { name: File }  — kept for detail seek
+let filtered    = [];
+let sortCol     = 'CreatedDate';
+let sortDir     = -1;
+let page        = 1;
+let pending     = [];       // File[] staged for loading
+let loading     = false;
+let filterTimer = null;
+let loadStart   = 0;
+
+// Per-file queue state
+let qState      = {};       // { filename: 'pending'|'loading'|'done'|'error' }
+
+const SECTIONS = {
+  'Core':         ['Id','Name','Type','vlocity_cmt__Status__c','IsActive','IsDeleted','AccountSource','Brand_Type__c','Segment__c','Segment_Indicator__c','IsCustomerPortal','HasSensitivityDataPermission__c','HasB2BSensitivityDataPermission__c'],
+  'Address':      ['BillingStreet','House_Number__c','House_Number_Extension__c','BillingCity','BillingPostalCode','BillingState','BillingCountry','CountryCode__c','Main_Address__c'],
+  'Contact':      ['vlocity_cmt__BillingEmailAddress__c','Phone','Fax'],
+  'Account Info': ['Sales_Channel__c','UserProfile__c','AccountRecordTypeFormula__c','CurrentHeirarchyLevel__c','Num_of_Child_Accounts__c','Num_of_Active_Child_Accounts__c','Num_of_Assets_LifeCycle__c','Num_of_Non_Inactive_Assets_LifeCycle__c','Total_Subscriptions__c','Num_Of_Open_Opportunities__c','Last_Opportunity_Close_Date__c'],
+  'Dates':        ['CreatedDate','LastModifiedDate','LastActivityDate','InactivationDate__c','LastNCRefreshTimestamp__c','SystemModstamp'],
+  'Payment':      ['Payment_Method__c','Payment_Terms__c','Bank_Account_Holder_Name__c','Bank_Account_Number__c','Paper_Invoice__c','vlocity_cmt__EnableAutopay__c','vlocity_cmt__BillDeliveryMethod__c','vlocity_cmt__BillFrequency__c'],
+  'System IDs':   ['Id','OwnerId','CreatedById','LastModifiedById','RecordTypeId','Account_Salesforce_ID__c','vlocity_cmt__PremisesId__c','vlocity_cmt__PersonContactId__c','vlocity_cmt__PartyId__c'],
+};
+
+// ============================================================
+//  Drop zone
+// ============================================================
+const dz = document.getElementById('dropZone');
+const fi = document.getElementById('fileInput');
+
+dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', ()  => dz.classList.remove('over'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); stageFiles([...e.dataTransfer.files]); });
+fi.addEventListener('change', () => { stageFiles([...fi.files]); fi.value = ''; });
+
+function stageFiles(files) {
+  let added = 0, skipped = 0;
+  files.forEach(f => {
+    const n = f.name.toLowerCase();
+    if (!n.includes('odido') || !n.endsWith('.txt')) { skipped++; return; }
+    if (pending.find(p => p.name === f.name && p.size === f.size)) return;
+    pending.push(f);
+    qState[f.name] = 'pending';
+    added++;
+  });
+  renderQueue();
+  if (skipped > 0 && added === 0) toast('Skipped ' + skipped + ' file(s) — name must contain "odido"', 'er');
+  else if (added > 0 && skipped > 0) toast('Queued ' + added + ', skipped ' + skipped + ' non-matching', 'ok');
+  else if (added > 0) toast('Queued ' + added + ' file(s)', 'ok');
+}
+
+function removePending(name) {
+  if (loading) return;
+  pending = pending.filter(f => f.name !== name);
+  delete qState[name];
+  renderQueue();
+}
+
+function renderQueue() {
+  const list = document.getElementById('queueList');
+  const hdr  = document.getElementById('queueHeader');
+  hdr.textContent = 'Queue — ' + pending.length + ' file' + (pending.length !== 1 ? 's' : '');
+
+  if (!pending.length) { list.innerHTML = '<div style="font-size:0.74rem;color:#475569;padding:4px 0">No files queued</div>'; }
+  else {
+    list.innerHTML = pending.map(f => {
+      const st = qState[f.name] || 'pending';
+      const stLabels = { pending:'Waiting', loading:'Parsing...', done:'Done', error:'Error' };
+      const rm = st === 'pending' ? '<span class="q-rm" onclick="removePending(\'' + esc(f.name) + '\')">&#10005;</span>' : '';
+      return '<div class="q-item ' + st + '">' +
+        '<span class="q-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
+        '<span class="q-size">' + fmtSize(f.size) + '</span>' +
+        '<span class="q-status">' + stLabels[st] + '</span>' +
+        rm + '</div>';
+    }).join('');
+  }
+
+  document.getElementById('loadBtn').disabled = pending.filter(f => qState[f.name] === 'pending').length === 0 || loading;
+}
+
+function fmtSize(b) {
+  if (b > 1e9) return (b/1e9).toFixed(1) + ' GB';
+  if (b > 1e6) return (b/1e6).toFixed(0) + ' MB';
+  return (b/1e3).toFixed(0) + ' KB';
+}
+
+// ============================================================
+//  Load all queued files sequentially
+// ============================================================
+async function startLoad() {
+  if (loading) return;
+  const toLoad = pending.filter(f => qState[f.name] === 'pending');
+  if (!toLoad.length) return;
+
+  loading   = true;
+  loadStart = Date.now();
+  document.getElementById('loadBtn').disabled   = true;
+  document.getElementById('progressCol').style.display = '';
+
+  let grandNew = 0, grandDups = 0, grandErrs = 0;
+  const totalFiles = toLoad.length;
+
+  for (let fi = 0; fi < totalFiles; fi++) {
+    const file = toLoad[fi];
+    qState[file.name] = 'loading';
+    renderQueue();
+
+    document.getElementById('curFileName').textContent = file.name;
+
+    const result = await loadOneFile(file, fi, totalFiles);
+    grandNew  += result.totalNew;
+    grandDups += result.dups;
+    grandErrs += result.errs;
+
+    qState[file.name] = result.error ? 'error' : 'done';
+    renderQueue();
+
+    // Show table as soon as first file is done
+    if (fi === 0 && DATA.length > 0) {
+      document.getElementById('tableWrap').style.display  = 'block';
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('clearBtn').style.display   = '';
+      rebuildDropdowns();
+      applyFilters();
+    }
+  }
+
+  // Final refresh
+  rebuildDropdowns();
+  applyFilters();
+
+  document.getElementById('curBar').style.width    = '100%';
+  document.getElementById('curBar').classList.add('done');
+  document.getElementById('overallBar').style.width = '100%';
+  document.getElementById('overallBar').classList.add('done');
+  document.getElementById('curFileName').textContent = 'All done';
+  document.getElementById('etaLbl').textContent = 'Completed in ' + fmtTime(Date.now() - loadStart);
+
+  loading = false;
+  document.getElementById('loadBtn').disabled = pending.filter(f => qState[f.name] === 'pending').length === 0;
+
+  // Remove completed files from pending
+  pending = pending.filter(f => qState[f.name] !== 'done');
+  renderQueue();
+
+  let msg = 'Loaded ' + grandNew.toLocaleString() + ' records';
+  if (grandDups > 0) msg += ', ' + grandDups.toLocaleString() + ' dupes skipped';
+  if (grandErrs > 0) msg += ', ' + grandErrs.toLocaleString() + ' errors';
+  toast(msg, 'ok');
+}
+
+function loadOneFile(file, fileIdx, totalFiles) {
+  return new Promise(resolve => {
+    fileStore[file.name] = file;
+
+    // Pass existing IDs to worker to handle dedup
+    // We only need IDs from this file's source to keep transfer small
+    const knownIds = DATA.filter(r => r._source === file.name).map(r => r.Id).filter(Boolean);
+
+    const worker = new Worker(WORKER_URL);
+    worker.postMessage({ file, sourceName: file.name, knownIds });
+
+    worker.onmessage = function({ data: msg }) {
+      if (msg.type === 'progress' || msg.type === 'batch') {
+        if (msg.records) DATA.push(...msg.records);
+
+        // Per-file progress bar
+        document.getElementById('curBar').style.width = Math.round(msg.pct * 100) + '%';
+        document.getElementById('curPct').textContent = Math.round(msg.pct * 100) + '%';
+
+        // Overall progress
+        const overallPct = ((fileIdx + msg.pct) / totalFiles);
+        document.getElementById('overallBar').style.width = Math.round(overallPct * 100) + '%';
+        document.getElementById('overallPct').textContent = Math.round(overallPct * 100) + '%';
+
+        // ETA
+        const elapsed = Date.now() - loadStart;
+        if (overallPct > 0.01) {
+          const eta = (elapsed / overallPct) * (1 - overallPct);
+          document.getElementById('etaLbl').textContent = 'ETA: ' + fmtTime(eta) + ' — ' + DATA.length.toLocaleString() + ' records loaded';
+        }
+
+        // Live table refresh every 5000 records approximately
+        if (msg.records && msg.records.length > 0 && DATA.length % 5000 < msg.records.length) {
+          rebuildDropdowns();
+          applyFilters();
+        }
+      }
+
+      if (msg.type === 'done') {
+        worker.terminate();
+        resolve({ totalNew: msg.totalNew, dups: msg.dups, errs: msg.errs, error: false });
+      }
+    };
+
+    worker.onerror = err => {
+      console.error('Worker error:', err);
+      worker.terminate();
+      resolve({ totalNew: 0, dups: 0, errs: 1, error: true });
+    };
+  });
+}
+
+function fmtTime(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  return Math.floor(s/60) + 'm ' + (s%60) + 's';
+}
+
+// ============================================================
+//  Clear all
+// ============================================================
+function clearAll() {
+  if (loading && !confirm('A load is in progress. Clear anyway?')) return;
+  DATA = []; filtered = []; fileStore = {};
+  pending = pending.map(f => { qState[f.name] = 'pending'; return f; });
+  renderQueue();
+  rebuildDropdowns();
+  document.getElementById('tableWrap').style.display  = 'none';
+  document.getElementById('emptyState').style.display = 'block';
+  document.getElementById('clearBtn').style.display   = 'none';
+  document.getElementById('progressCol').style.display = 'none';
+  document.getElementById('statsBar').innerHTML = '<span>No data loaded.</span>';
+  document.getElementById('tBody').innerHTML    = '';
+  loading = false;
+  toast('All data cleared', 'ok');
+}
+
+// ============================================================
+//  Dropdowns
+// ============================================================
+function rebuildDropdowns() {
+  rebuild('fStatus',  uniq(r => r['vlocity_cmt__Status__c']), 'All');
+  rebuild('fChannel', uniq(r => r['Sales_Channel__c']),       'All');
+  rebuild('fCity',    uniq(r => r['BillingCity']),             'All Cities');
+  rebuild('fYear',    uniq(r => r['CreatedDate'] ? r['CreatedDate'].slice(0,4) : ''), 'All Years');
+  rebuild('fSource',  uniq(r => r['_source']),                 'All Files');
+}
+
+function uniq(fn) { return [...new Set(DATA.map(fn).filter(Boolean))].sort(); }
+
+function rebuild(id, vals, ph) {
+  const sel = document.getElementById(id), cur = sel.value;
+  sel.innerHTML = '<option value="">' + ph + '</option>';
+  vals.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v;
+    if (v === cur) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+// ============================================================
+//  Filtering
+// ============================================================
+let lastFilterStr = '';
+
+function schedFilter() {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(applyFilters, 280);
+}
+
+function applyFilters() {
+  const search  = document.getElementById('searchInput').value.toLowerCase().trim();
+  const status  = document.getElementById('fStatus').value;
+  const channel = document.getElementById('fChannel').value;
+  const city    = document.getElementById('fCity').value;
+  const year    = document.getElementById('fYear').value;
+  const source  = document.getElementById('fSource').value;
+
+  filtered = DATA.filter(r => {
+    if (status  && r['vlocity_cmt__Status__c'] !== status) return false;
+    if (channel && r['Sales_Channel__c']        !== channel) return false;
+    if (city    && r['BillingCity']             !== city)   return false;
+    if (source  && r['_source']                !== source)  return false;
+    if (year    && !r['CreatedDate'].startsWith(year))      return false;
+    if (search) {
+      const h = r['Name'] + '\0' + r['BillingCity'] + '\0' + r['BillingPostalCode'] + '\0' + r['Id'] + '\0' + r['_source'];
+      if (h.toLowerCase().indexOf(search) === -1) return false;
+    }
+    return true;
+  });
+
+  sortData();
+  page = 1;
+  render();
+}
+
+// ============================================================
+//  Sort
+// ============================================================
+function sortBy(col) {
+  if (sortCol === col) sortDir *= -1; else { sortCol = col; sortDir = 1; }
+  document.querySelectorAll('th[data-col]').forEach(t => t.classList.remove('sorted'));
+  document.querySelector('th[data-col="' + col + '"]')?.classList.add('sorted');
+  sortData(); page = 1; render();
+}
+
+function sortData() {
+  filtered.sort((a, b) => (a[sortCol] || '').localeCompare(b[sortCol] || '') * sortDir);
+}
+
+// ============================================================
+//  Render (paginated, DOM-efficient)
+// ============================================================
+function render() {
+  if (!DATA.length) return;
+
+  const body    = document.getElementById('tBody');
+  const noRes   = document.getElementById('noRes');
+  const totalPg = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  if (page > totalPg) page = totalPg;
+
+  const start = (page - 1) * PAGE_SIZE;
+  const slice = filtered.slice(start, start + PAGE_SIZE);
+
+  const active   = filtered.filter(r => r['vlocity_cmt__Status__c'] === 'Active').length;
+  const srcCount = new Set(DATA.map(r => r._source)).size;
+  const liveLbl  = loading ? '<span class="live-badge">LOADING</span>' : '';
+
+  document.getElementById('statsBar').innerHTML =
+    '<span>' + liveLbl + ' Showing <strong>' + filtered.length.toLocaleString() + '</strong> of <strong>' + DATA.length.toLocaleString() + '</strong> records</span>' +
+    '<span>Active: <strong>' + active.toLocaleString() + '</strong></span>' +
+    '<span>Inactive: <strong>' + (filtered.length - active).toLocaleString() + '</strong></span>' +
+    '<span>Files: <strong>' + srcCount + '</strong></span>' +
+    buildPager(page, totalPg);
+
+  if (!filtered.length) { body.innerHTML = ''; noRes.style.display = 'block'; return; }
+  noRes.style.display = 'none';
+
+  const rows = [];
+  for (let i = 0; i < slice.length; i++) {
+    const r  = slice[i];
+    const gi = start + i;
+    const s  = r['vlocity_cmt__Status__c'];
+    const sb = s === 'Active' ? '<span class="ba">Active</span>' : s === 'Inactive' ? '<span class="bi">Inactive</span>' : esc(s);
+    const ch = r['Sales_Channel__c'] ? '<span class="bc">' + esc(r['Sales_Channel__c']) + '</span>' : '';
+    rows.push('<tr><td title="' + esc(r.Name) + '">' + esc(r.Name) + '</td>' +
+      '<td>' + esc(r.BillingCity) + '</td>' +
+      '<td>' + esc(r.BillingPostalCode) + '</td>' +
+      '<td>' + sb + '</td><td>' + ch + '</td>' +
+      '<td>' + (r.CreatedDate      ? r.CreatedDate.slice(0,10)      : '') + '</td>' +
+      '<td>' + (r.LastModifiedDate ? r.LastModifiedDate.slice(0,10) : '') + '</td>' +
+      '<td>' + esc(r.Brand_Type__c) + '</td>' +
+      '<td class="src" title="' + esc(r._source) + '">' + esc(r._source) + '</td>' +
+      '<td><button class="btn" style="padding:3px 9px;font-size:0.72rem" onclick="showDetail(' + gi + ')">View</button></td></tr>');
+  }
+  body.innerHTML = rows.join('');
+}
+
+function buildPager(cur, total) {
+  if (total <= 1) return '';
+  let h = '<div class="pager">';
+  h += '<button onclick="goPage(' + (cur-1) + ')" ' + (cur===1?'disabled':'') + '>&laquo;</button>';
+  const show = new Set();
+  show.add(1); show.add(total);
+  for (let p = Math.max(1,cur-2); p <= Math.min(total,cur+2); p++) show.add(p);
+  let prev = 0;
+  [...show].sort((a,b)=>a-b).forEach(p => {
+    if (prev && p - prev > 1) h += '<span class="pg-info">...</span>';
+    h += '<button class="' + (p===cur?'cur':'') + '" onclick="goPage(' + p + ')">' + p + '</button>';
+    prev = p;
+  });
+  h += '<button onclick="goPage(' + (cur+1) + ')" ' + (cur===total?'disabled':'') + '>&raquo;</button>';
+  h += '<span class="pg-info">' + cur.toLocaleString() + ' / ' + total.toLocaleString() + '</span>';
+  h += '</div>';
+  return h;
+}
+
+function goPage(p) {
+  const total = Math.ceil(filtered.length / PAGE_SIZE);
+  page = Math.max(1, Math.min(p, total));
+  render();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ============================================================
+//  Detail panel — byte-seek for the full record
+// ============================================================
+async function showDetail(idx) {
+  const lean = filtered[idx];
+  if (!lean) return;
+
+  document.getElementById('dTitle').textContent   = lean.Name || 'Account Detail';
+  document.getElementById('dContent').innerHTML   = '<div class="detail-loading">Reading record from file...</div>';
+  document.getElementById('detailPanel').classList.add('open');
+
+  let r = null;
+  const f = fileStore[lean._source];
+  if (f && lean._byteOffset !== undefined) {
+    try {
+      const blob  = f.slice(lean._byteOffset, lean._byteOffset + lean._byteLen + 20);
+      const text  = (await blob.text()).split('\n')[0];
+      r = JSON.parse(text);
+    } catch(e) { /* fall back to lean */ }
+  }
+  r = r || lean;
+  r._source = lean._source;
+
+  let html = '';
+
+  // Helper: format a raw field value for display
+  // Returns null if the field should be hidden (empty, or a false boolean)
+  function fmtVal(k, v) {
+    if (v === null || v === undefined || v === '') return null;
+    const s = v.toString().replace(/<[^>]+>/g, '').trim();
+    if (!s) return null;
+    // Boolean handling: 'false' is only hidden for non-meaningful fields.
+    // For explicit boolean fields (__c fields or known booleans), show Yes/No.
+    if (s === 'false') return null;   // hide false booleans — they clutter the view
+    if (s === 'true')  return 'Yes';  // show true booleans as Yes
+    if (s === '0.0')   return null;   // hide zero numerics
+    return s;
+  }
+
+  for (const [sec, keys] of Object.entries(SECTIONS)) {
+    const rows = keys.map(k => {
+      const raw = r[k];
+      const cv  = fmtVal(k, raw);
+      if (!cv) return '';
+      const label = k.replace('__c','').replace('vlocity_cmt__','').replace(/_/g,' ');
+      return '<div class="dr"><span class="dk">' + esc(label) + '</span><span class="dv">' + esc(cv) + '</span></div>';
+    }).filter(Boolean).join('');
+    if (rows) html += '<div class="ds"><h3>' + sec + '</h3>' + rows + '</div>';
+  }
+
+  html += '<div class="ds"><h3>Import</h3><div class="dr"><span class="dk">Source file</span><span class="dv">' + esc(r._source||'') + '</span></div></div>';
+
+  // All remaining fields — only show those with meaningful values
+  const shown = new Set(Object.values(SECTIONS).flat());
+  const rest  = Object.entries(r).filter(([k,v]) => !shown.has(k) && k[0] !== '_');
+  if (rest.length) {
+    const rows = rest.map(([k,v]) => {
+      const cv = fmtVal(k, v);
+      if (!cv) return '';
+      const label = k.replace('__c','').replace('vlocity_cmt__','').replace(/_/g,' ');
+      return '<div class="dr"><span class="dk">' + esc(label) + '</span><span class="dv">' + esc(cv) + '</span></div>';
+    }).filter(Boolean).join('');
+    if (rows) html += '<div class="ds"><h3>All Other Fields</h3>' + rows + '</div>';
+  }
+
+  document.getElementById('dContent').innerHTML = html;
+
+  // Parse and pre-render SObjectLog
+  _logEntries = parseSObjectLog(r['SObjectLog__c'] || '');
+  rebuildLog('all');
+  switchTab('fields');
+}
+
+// ============================================================
+//  Tab switching
+// ============================================================
+function switchTab(tab) {
+  document.getElementById('dContent').style.display = tab === 'fields' ? '' : 'none';
+  document.getElementById('dLog').style.display     = tab === 'log'    ? '' : 'none';
+  document.getElementById('tabFields').classList.toggle('active', tab === 'fields');
+  document.getElementById('tabLog').classList.toggle('active', tab === 'log');
+}
+
+// ============================================================
+//  SObjectLog parser
+// ============================================================
+let _logEntries = [];
+let _logFilter  = 'all';
+
+function parseSObjectLog(blob) {
+  if (!blob || !blob.trim()) return [];
+  const tsPat = /(?=\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})/;
+  const parts  = blob.split(tsPat).filter(s => s.trim());
+  const out    = [];
+  for (const raw of parts) {
+    const segs = raw.split(' - ');
+    if (segs.length < 3) continue;
+    const ts     = segs[0].trim();
+    const actor  = segs[1].trim();
+    const dirRaw = segs[2];
+    let direction, message;
+    if (dirRaw.startsWith('- ')) {
+      direction = '';
+      message   = [dirRaw.slice(2), ...segs.slice(3)].join(' - ').trim();
+    } else {
+      direction = dirRaw.trim();
+      message   = segs.slice(3).join(' - ').trim();
+    }
+    let type = 'other';
+    const ml = message.toLowerCase();
+    if (ml.startsWith('email verstuurd') || (ml.includes('email') && ml.includes('@'))) type = 'email';
+    else if (ml.startsWith('sms verstuurd')) type = 'sms';
+    else if (direction.toLowerCase() === 'inbound')                                     type = 'inbound';
+    out.push({ ts, actor, direction, message, type });
+  }
+  return out;
+}
+
+function rebuildLog(filter) {
+  _logFilter = filter;
+  document.getElementById('dLog').innerHTML = buildLogHTML(_logEntries, filter);
+}
+
+function buildLogHTML(entries, filter) {
+  const counts = { all: entries.length, email: 0, sms: 0, inbound: 0, other: 0 };
+  entries.forEach(e => { if (e.type in counts) counts[e.type]++; });
+
+  const shown  = filter === 'all' ? entries : entries.filter(e => e.type === filter);
+  const icons  = { email:'📧', sms:'📱', inbound:'📞', other:'📋' };
+  const labels = { email:'Email', sms:'SMS', inbound:'Inbound', other:'Other' };
+
+  let h = '<div class="log-section"><h3>Activity Log</h3>';
+
+  // Filter bar
+  h += '<div class="log-filters">';
+  ['all','email','sms','inbound','other'].forEach(t => {
+    const c = t === 'all' ? counts.all : counts[t];
+    if (t !== 'all' && c === 0) return;
+    const lbl    = t === 'all' ? 'All' : labels[t];
+    const active = filter === t ? ' active' : '';
+    h += '<button class="log-filter-btn' + active + '" onclick="rebuildLog(\'' + t + '\')">'
+      + lbl + ' <span style="opacity:.6">(' + c + ')</span></button>';
+  });
+  h += '<span class="log-count">' + shown.length + ' of ' + entries.length + '</span>';
+  h += '</div>';
+
+  if (!shown.length) {
+    h += '<div class="log-empty">No entries for this filter.</div></div>';
+    return h;
+  }
+
+  h += '<div class="log-timeline">';
+  shown.forEach((e, idx) => {
+    const icon   = icons[e.type] || '📋';
+    const isLast = idx === shown.length - 1;
+
+    // Structured message rendering
+    let msgHtml = esc(e.message);
+
+    const emailM = e.message.match(/^Email verstuurd:\s*([\w._%+\-]+@[\w.\-]+\.[a-z]{2,})(?:\s+\((.+)\))?$/i);
+    if (emailM) {
+      msgHtml = 'Email verstuurd: <span class="log-email">' + esc(emailM[1]) + '</span>';
+      if (emailM[2]) msgHtml += ' <span class="log-tpl">(' + esc(emailM[2]) + ')</span>';
+    }
+
+    const smsM = e.message.match(/^SMS verstuurd:\s*(\S+)(?:\s+\((.+)\))?$/i);
+    if (smsM) {
+      msgHtml = 'SMS verstuurd: <span class="log-phone">' + esc(smsM[1]) + '</span>';
+      if (smsM[2]) msgHtml += ' <span class="log-tpl">(' + esc(smsM[2]) + ')</span>';
+    }
+
+    if (e.type === 'inbound') {
+      msgHtml = esc(e.message).replace(
+        /([\w._%+\-]+@[\w.\-]+\.[a-z]{2,})/gi,
+        '<span class="log-email">$1</span>'
+      );
+    }
+
+    const dirBadge = e.direction
+      ? '<span class="log-dir ' + (e.direction.toLowerCase() === 'inbound' ? 'inbound' : 'outbound') + '">' + esc(e.direction) + '</span>'
+      : '';
+    const actorHtml = e.actor !== 'system'
+      ? '<span class="log-actor-label">by <span style="color:#94a3b8">' + esc(e.actor) + '</span></span>'
+      : '';
+
+    h += '<div class="log-entry type-' + e.type + '">'
+      + '<div class="log-icon-col"><span class="log-icon">' + icon + '</span>'
+      + (!isLast ? '<div class="log-vline"></div>' : '') + '</div>'
+      + '<div class="log-body">'
+      +   '<div class="log-ts">' + esc(e.ts) + '</div>'
+      +   '<div class="log-meta">' + actorHtml + dirBadge + '</div>'
+      +   '<div class="log-msg">' + msgHtml + '</div>'
+      + '</div></div>';
+  });
+
+  h += '</div></div>';
+  return h;
+}
+
+function closeDetail() { document.getElementById('detailPanel').classList.remove('open'); }
+
+function resetFilters() {
+  ['searchInput','fStatus','fChannel','fCity','fYear','fSource'].forEach(id => document.getElementById(id).value = '');
+  applyFilters();
+}
+
+// ============================================================
+//  Toast + utils
+// ============================================================
+let tTimer;
+function toast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = (type === 'ok' ? '✓  ' : '✕  ') + msg;
+  t.className = 'toast ' + type + ' up';
+  clearTimeout(tTimer);
+  tTimer = setTimeout(() => t.classList.remove('up'), 4000);
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Init queue render
+renderQueue();
+</script>
+</body>
+</html>
