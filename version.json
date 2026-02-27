@@ -1,4 +1,4 @@
 {
-  "version": "1.2.1",
-  "notes": "added favicon as base64 embedded in HTML to keep file fully self-contained."
+  "version": "1.2.3",
+  "notes": "Better file handeling, and some Bug fixes as mentioned by licon @Tweakers.net in post https://tweakers.net/nieuws/245128/hackers-zetten-eerste-batch-met-gestolen-odido-data-online.html Thanks!"
 }

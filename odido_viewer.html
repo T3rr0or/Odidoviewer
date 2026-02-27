@@ -358,7 +358,7 @@
       color: #3b82f6;
     }
 
-    .stats-bar .live-badge {
+    .live-badge {
       background: #78350f;
       color: #fcd34d;
       padding: 1px 8px;
@@ -976,7 +976,7 @@
       <strong id="ubVersion"></strong> is available.
       <span class="ub-notes" id="ubNotes"></span>
     </div>
-    <a class="ub-link" href="https://github.com/datasafari-org/Odidoviewer/releases" target="_blank" rel="noopener">View
+    <a class="ub-link" href="https://github.com/datasafari-org/Odidoviewer" target="_blank" rel="noopener">View
       release</a>
     <button class="ub-dismiss" id="ubDismiss" title="Dismiss">&#10005;</button>
   </div>
@@ -1106,7 +1106,8 @@
   </div>
 
   <div class="stats-bar" id="statsBar">
-    <span>No data loaded yet.</span>
+    <span class="live-badge" id="liveBadge" style="display:none">LOADING</span>
+    <span id="statsContent">No data loaded yet.</span>
   </div>
 
   <div class="empty" id="emptyState">
@@ -1194,7 +1195,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
             if (r.Id) known.add(r.Id);
             const lean = {};
             for (const k of LEAN_KEYS) lean[k] = r[k] || '';
-            if (r.SObjectLog__c) lean._log = r.SObjectLog__c.toLowerCase();
+            lean._hasLog     = !!r.SObjectLog__c;
             lean._source     = sourceName;
             lean._byteOffset = lineBytePos;
             lean._byteLen    = lineBytes - 1;
@@ -1225,7 +1226,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
         if (r.Id) known.add(r.Id);
         const lean = {};
         for (const k of LEAN_KEYS) lean[k] = r[k] || '';
-        if (r.SObjectLog__c) lean._log = r.SObjectLog__c.toLowerCase();
+        lean._hasLog     = !!r.SObjectLog__c;
         lean._source     = sourceName;
         lean._byteOffset = lineBytePos;
         lean._byteLen    = enc.encode(tail).length;
@@ -1255,6 +1256,9 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
     let loading = false;
     let filterTimer = null;
     let loadStart = 0;
+    let lastUIRefresh = 0;
+    let activeWorker = null;
+    let totalDups = 0;
 
     // Per-file queue state
     let qState = {};       // { filename: 'pending'|'loading'|'done'|'error' }
@@ -1357,6 +1361,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
         const result = await loadOneFile(file, fi, totalFiles);
         grandNew += result.totalNew;
         grandDups += result.dups;
+        totalDups += result.dups;
         grandErrs += result.errs;
 
         qState[file.name] = result.error ? 'error' : 'done';
@@ -1400,11 +1405,11 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
       return new Promise(resolve => {
         fileStore[file.name] = file;
 
-        // Pass existing IDs to worker to handle dedup
-        // We only need IDs from this file's source to keep transfer small
-        const knownIds = DATA.filter(r => r._source === file.name).map(r => r.Id).filter(Boolean);
+        // Pass ALL known IDs to worker so cross-file duplicates are caught correctly
+        const knownIds = DATA.map(r => r.Id).filter(Boolean);
 
-        const worker = new Worker(WORKER_URL);
+        activeWorker = new Worker(WORKER_URL);
+        const worker = activeWorker;
         worker.postMessage({ file, sourceName: file.name, knownIds });
 
         worker.onmessage = function ({ data: msg }) {
@@ -1427,8 +1432,9 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
               document.getElementById('etaLbl').textContent = 'ETA: ' + fmtTime(eta) + ' — ' + DATA.length.toLocaleString() + ' records loaded';
             }
 
-            // Live table refresh every 5000 records approximately
-            if (msg.records && msg.records.length > 0 && DATA.length % 5000 < msg.records.length) {
+            // Live table refresh throttled to wall-clock time (max once per 800ms)
+            if (msg.records && msg.records.length > 0 && Date.now() - lastUIRefresh > 800) {
+              lastUIRefresh = Date.now();
               rebuildDropdowns();
               applyFilters();
             }
@@ -1459,7 +1465,8 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
     // ============================================================
     function clearAll() {
       if (loading && !confirm('A load is in progress. Clear anyway?')) return;
-      DATA = []; filtered = []; fileStore = {};
+      if (activeWorker) { activeWorker.terminate(); activeWorker = null; }
+      DATA = []; filtered = []; fileStore = {}; totalDups = 0;
       pending = pending.map(f => { qState[f.name] = 'pending'; return f; });
       renderQueue();
       rebuildDropdowns();
@@ -1467,7 +1474,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
       document.getElementById('emptyState').style.display = 'block';
       document.getElementById('clearBtn').style.display = 'none';
       document.getElementById('progressCol').style.display = 'none';
-      document.getElementById('statsBar').innerHTML = '<span>No data loaded.</span>';
+      document.getElementById('statsContent').innerHTML = 'No data loaded.';
       document.getElementById('tBody').innerHTML = '';
       loading = false;
       toast('All data cleared', 'ok');
@@ -1529,13 +1536,13 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
         if (source && r['_source'] !== source) return false;
         if (year && !r['CreatedDate'].startsWith(year)) return false;
         if (brand && r['Brand_Type__c'] !== brand) return false;
-        if (hasLog && !r['_log']) return false;
+        if (hasLog && !r._hasLog) return false;
         if (createdFrom && (!r['CreatedDate'] || r['CreatedDate'].slice(0, 10) < createdFrom)) return false;
         if (createdTo && (!r['CreatedDate'] || r['CreatedDate'].slice(0, 10) > createdTo)) return false;
         if (modifiedFrom && (!r['LastModifiedDate'] || r['LastModifiedDate'].slice(0, 10) < modifiedFrom)) return false;
         if (modifiedTo && (!r['LastModifiedDate'] || r['LastModifiedDate'].slice(0, 10) > modifiedTo)) return false;
         if (search) {
-          const h = r['Name'] + '\0' + r['BillingCity'] + '\0' + r['BillingPostalCode'] + '\0' + r['Id'] + '\0' + r['_source'] + '\0' + (r['_log'] || '');
+          const h = r['Name'] + '\0' + r['BillingCity'] + '\0' + r['BillingPostalCode'] + '\0' + r['Id'] + '\0' + r['_source'];
           if (h.toLowerCase().indexOf(search) === -1) return false;
         }
         return true;
@@ -1578,13 +1585,14 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
 
       const active = filtered.filter(r => r['vlocity_cmt__Status__c'] === 'Active').length;
       const srcCount = new Set(DATA.map(r => r._source)).size;
-      const liveLbl = loading ? '<span class="live-badge">LOADING</span>' : '';
 
-      document.getElementById('statsBar').innerHTML =
-        '<span>' + liveLbl + ' Showing <strong>' + filtered.length.toLocaleString() + '</strong> of <strong>' + DATA.length.toLocaleString() + '</strong> records</span>' +
-        '<span>Active: <strong>' + active.toLocaleString() + '</strong></span>' +
-        '<span>Inactive: <strong>' + (filtered.length - active).toLocaleString() + '</strong></span>' +
-        '<span>Files: <strong>' + srcCount + '</strong></span>' +
+      document.getElementById('liveBadge').style.display = loading ? '' : 'none';
+      document.getElementById('statsContent').innerHTML =
+        'Showing <strong>' + filtered.length.toLocaleString() + '</strong> of <strong>' + DATA.length.toLocaleString() + '</strong> records' +
+        ' &nbsp;|&nbsp; Active: <strong>' + active.toLocaleString() + '</strong>' +
+        ' &nbsp;|&nbsp; Inactive: <strong>' + (filtered.length - active).toLocaleString() + '</strong>' +
+        (totalDups > 0 ? ' &nbsp;|&nbsp; Dupes skipped: <strong>' + totalDups.toLocaleString() + '</strong>' : '') +
+        ' &nbsp;|&nbsp; Files: <strong>' + srcCount + '</strong>' +
         buildPager(page, totalPg);
 
       if (!filtered.length) { body.innerHTML = ''; noRes.style.display = 'block'; return; }
@@ -1859,13 +1867,13 @@ self.onmessage = async function({ data: { file, sourceName, knownIds } }) {
     }
 
     function esc(s) {
-      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // ============================================================
     //  Version check
     // ============================================================
-    const APP_VERSION = '1.2.1';
+    const APP_VERSION = '1.2.3';
     const VERSION_URL = 'https://raw.githubusercontent.com/datasafari-org/Odidoviewer/main/version.json';
     const LS_DISMISSED = 'ov_dismissed_version';
     const LS_CHECKED = 'ov_last_checked';
