@@ -26,14 +26,28 @@ This viewer solves that. It is one `.html` file. You open it in Chrome, load you
 - The table becomes usable as soon as the first file finishes, while the rest continue loading in the background
 
 ### Filters and search
-- Free-text search across name, city, postal code, Salesforce ID, and source filename
+- Free-text search across name, city, postal code, Salesforce ID, source filename, and **all email addresses found in the record**
+- Email addresses are extracted from every field (including the activity log) during parsing — partial matches like `@odido.nl` or `jan@` work instantly
 - Dropdown slicers for Status, Sales Channel, City, Year Created, and Source File
 - All dropdowns are rebuilt dynamically after each import — they always reflect exactly what is loaded
 - Sorting on every column, click again to reverse
 - Paginated table (250 records per page) so the DOM stays fast even with 600k+ records loaded
 
+### Full log index mode
+Enable the **Full Log Index** toggle (the 🔍 break-glass button) before loading to make the activity log searchable.
+
+Unlike the standard fields, log data is not kept in memory — it is streamed from the original file on demand when you perform a search. This means:
+
+- **No memory overhead** regardless of how many files are loaded
+- A progress indicator (`Searching logs… 42% — 3 found so far`) shows while the search runs
+- Results for non-log fields appear immediately; log matches are appended when the scan completes
+- Each new search cancels the previous one automatically
+- Works correctly across all loaded files simultaneously
+
+Patience is required for large datasets — reading gigabytes of log data from disk takes time. Non-log searches (name, city, email, etc.) are always instant.
+
 ### Record detail panel
-Click **View** on any row to open the detail panel. The full record is read on demand by seeking directly to the relevant bytes in the source file — no need to keep 257 fields per record in memory.
+Click any row to open the detail panel. The full record is read on demand by seeking directly to the relevant bytes in the source file — no need to keep 257 fields per record in memory.
 
 The detail panel has two tabs.
 
@@ -107,32 +121,35 @@ Click any button to narrow the timeline to that entry type. The count next to ea
 2. Open it in Chrome (File > Open, or drag the file onto the browser)
 3. Click the drop zone or drag your dump files onto it
 4. Files must be `.txt` and must have `odido` in the filename — the viewer skips anything else automatically
-5. Click **Load All Files**
-6. Use the search box and filter dropdowns to find records
-7. Click **View** on any row to open the detail panel
-8. Switch to the **Activity Log** tab to see the full communication history for that account
+5. Optionally enable **Full Log Index** mode if you need to search inside activity logs
+6. Click **Load All Files**
+7. Use the search box and filter dropdowns to find records — email addresses (full or partial) work immediately
+8. Click any row to open the detail panel
+9. Switch to the **Activity Log** tab to see the full communication history for that account
 
 ---
 
 ## Performance
 
-Each record in the dump is approximately 8 KB of raw JSON (257 Salesforce fields). The viewer handles this by keeping only a lean index in memory (9 fields, ~200 bytes per record) and reading full records on demand from the file using byte offsets recorded during parsing.
+Each record in the dump is approximately 8 KB of raw JSON (257 Salesforce fields). The viewer handles this by keeping only a lean index in memory (9 fields plus extracted email addresses, ~250 bytes per record) and reading full records on demand from the file using byte offsets recorded during parsing.
 
 | Metric | Value |
 |---|---|
 | Records per 250 MB file | ~30,000 |
 | Total across 21 files | ~630,000 |
-| Memory for full dataset (lean index) | ~125 MB |
-| Memory per full record (on View click) | negligible — single file seek |
+| Memory for full dataset (lean index) | ~150 MB |
+| Memory per full record (on detail open) | negligible — single file seek |
 | Parse time per 250 MB file | ~2–3 seconds |
+| Log search (full index mode) | seconds to minutes depending on dataset size |
 
-The parser runs in a Web Worker so the main thread — and therefore the UI — is never blocked.
+The parser runs in a Web Worker so the main thread — and therefore the UI — is never blocked during loading. Log searches run in a separate Worker and can be cancelled at any time by changing the query.
 
 ---
 
 ## Data notes
 
-- The `vlocity_cmt__BillingEmailAddress__c` field is present on all records but may be empty on accounts migrated from legacy systems. Email addresses are more reliably found in the Activity Log via the `SObjectLog__c` field.
+- Email addresses are extracted from all fields during parsing, including from `SObjectLog__c` log entries. Searching for `@odido.nl` or a partial address will match any record where that string appears anywhere in the data.
+- The `vlocity_cmt__BillingEmailAddress__c` field is present on all records but may be empty on accounts migrated from legacy systems. Activity log entries are a more complete source of email addresses.
 - All records in this dump are B2C consumer accounts under the TMNL (T-Mobile NL / Odido) brand.
 - Account source for all records is `Migration` — these are legacy accounts moved into Salesforce.
 - The `SObjectLog__c` field can contain years of communication history per account, going back to 2019 in some cases.

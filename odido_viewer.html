@@ -1344,6 +1344,7 @@ const enc   = new TextEncoder();
 
 self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogIndex } }) {
   const known = new Set(knownIds);
+  const effectiveBatch = fullLogIndex ? 50 : BATCH;
   const size  = file.size;
   let offset  = 0, tail = '', lineBytePos = 0;
   const batch = [];
@@ -1357,7 +1358,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
     tail = lines.pop(); // incomplete last line, carry forward
 
     for (const line of lines) {
-      const lineBytes = enc.encode(line + '\\n').length;
+      const lineBytes = enc.encode(line).length + 1;
       if (line.trim()) {
         try {
           const r = JSON.parse(line);
@@ -1368,7 +1369,9 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
             const lean = {};
             for (const k of LEAN_KEYS) lean[k] = r[k] || '';
             lean._hasLog     = !!r.SObjectLog__c;
-            lean._logSearch  = r.SObjectLog__c ? (fullLogIndex ? r.SObjectLog__c.toLowerCase() : r.SObjectLog__c.slice(0, 1000).toLowerCase()) : '';
+            lean._logSearch  = r.SObjectLog__c && !fullLogIndex ? r.SObjectLog__c.slice(0, 1000).toLowerCase() : '';
+            const _em = line.match(/[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/gi);
+            lean._emails     = _em ? [...new Set(_em.map(e => e.toLowerCase()))].join(' ') : '';
             lean._source     = sourceName;
             lean._byteOffset = lineBytePos;
             lean._byteLen    = lineBytes - 1;
@@ -1376,7 +1379,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
             totalNew++;
           }
         } catch(e) { errs++; }
-        if (batch.length >= BATCH) {
+        if (batch.length >= effectiveBatch) {
           self.postMessage({ type:'batch', records: batch.splice(0), totalNew, dups, errs, pct: offset/size });
         }
       }
@@ -1400,7 +1403,9 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
         const lean = {};
         for (const k of LEAN_KEYS) lean[k] = r[k] || '';
         lean._hasLog     = !!r.SObjectLog__c;
-        lean._logSearch  = r.SObjectLog__c ? r.SObjectLog__c.slice(0, 1000).toLowerCase() : '';
+        lean._logSearch  = r.SObjectLog__c && !fullLogIndex ? r.SObjectLog__c.slice(0, 1000).toLowerCase() : '';
+        const _em = tail.match(/[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/gi);
+        lean._emails     = _em ? [...new Set(_em.map(e => e.toLowerCase()))].join(' ') : '';
         lean._source     = sourceName;
         lean._byteOffset = lineBytePos;
         lean._byteLen    = enc.encode(tail).length;
@@ -1415,7 +1420,29 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
 };
 `;
     const WORKER_URL = URL.createObjectURL(new Blob([W_SRC], { type: 'application/javascript' }));
+    // On-demand streaming log search — reads byte ranges from file, no strings in memory
+    const LOG_SEARCH_SRC = `
+self.onmessage = async function({ data: { fileMap, candidates, search } }) {
+  const matches = [];
+  const n       = candidates.length;
+  const PARALLEL = 20; // concurrent slice reads
 
+  for (let i = 0; i < n; i += PARALLEL) {
+    const batch = candidates.slice(i, i + PARALLEL);
+    const texts = await Promise.all(batch.map(({ byteOffset, byteLen, source }) => {
+      const file = fileMap[source];
+      return file ? file.slice(byteOffset, byteOffset + byteLen).text().catch(() => '') : Promise.resolve('');
+    }));
+    texts.forEach((text, j) => {
+      if (text.toLowerCase().indexOf(search) !== -1) matches.push(batch[j].dataIdx);
+    });
+    // Progress update every batch so the UI stays responsive
+    self.postMessage({ type: 'progress', done: Math.min(i + PARALLEL, n), total: n, found: matches.length });
+  }
+  self.postMessage({ type: 'done', matches });
+};
+`;
+    const LOG_SEARCH_URL = URL.createObjectURL(new Blob([LOG_SEARCH_SRC], { type: 'application/javascript' }));
     // ============================================================
     //  State
     // ============================================================
@@ -1423,6 +1450,8 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
     let DATA = [];       // lean records
     let fileStore = {};       // { name: File }  — kept for detail seek
     let filtered = [];
+    let filteredActiveCount = 0;
+    let cachedSrcCount = 0;
     let sortCol = 'CreatedDate';
     let sortDir = -1;
     let page = 1;
@@ -1432,6 +1461,8 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
     let loadStart = 0;
     let lastUIRefresh = 0;
     let activeWorker = null;
+    let logSearchWorker = null;
+    let logSearchToken = 0;
     let totalDups = 0;
     let fullLogIndex = false;
 
@@ -1574,6 +1605,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
       if (grandDups > 0) msg += ', ' + grandDups.toLocaleString() + ' dupes skipped';
       if (grandErrs > 0) msg += ', ' + grandErrs.toLocaleString() + ' errors';
       toast(msg, 'ok');
+
     }
 
     function loadOneFile(file, fileIdx, totalFiles) {
@@ -1607,12 +1639,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
               document.getElementById('etaLbl').textContent = 'ETA: ' + fmtTime(eta) + ' — ' + DATA.length.toLocaleString() + ' records loaded';
             }
 
-            // Live table refresh throttled to wall-clock time (max once per 800ms)
-            if (msg.records && msg.records.length > 0 && Date.now() - lastUIRefresh > 800) {
-              lastUIRefresh = Date.now();
-              rebuildDropdowns();
-              applyFilters();
-            }
+            // Table refresh deferred to file completion to avoid O(n²) mid-parse rescans
           }
 
           if (msg.type === 'done') {
@@ -1634,7 +1661,6 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
       if (s < 60) return s + 's';
       return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
     }
-
     // ============================================================
     //  Full log index (break-the-glass)
     // ============================================================
@@ -1673,6 +1699,7 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
     function clearAll() {
       if (loading && !confirm('A load is in progress. Clear anyway?')) return;
       if (activeWorker) { activeWorker.terminate(); activeWorker = null; }
+      if (logSearchWorker) { logSearchWorker.terminate(); logSearchWorker = null; }
       DATA = []; filtered = []; fileStore = {}; totalDups = 0;
       pending = pending.map(f => { qState[f.name] = 'pending'; return f; });
       renderQueue();
@@ -1699,7 +1726,11 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
       rebuild('fBrand', uniq(r => r['Brand_Type__c']), 'All Brands');
     }
 
-    function uniq(fn) { return [...new Set(DATA.map(fn).filter(Boolean))].sort(); }
+    function uniq(fn) {
+      const s = new Set();
+      for (let i = 0; i < DATA.length; i++) { const v = fn(DATA[i]); if (v) s.add(v); }
+      return [...s].sort();
+    }
 
     function rebuild(id, vals, ph) {
       const sel = document.getElementById(id), cur = sel.value;
@@ -1735,8 +1766,8 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
       const modifiedTo = document.getElementById('fModifiedTo').value;
       const brand = document.getElementById('fBrand').value;
       const hasLog = document.getElementById('fHasLog').checked;
-
-      filtered = DATA.filter(r => {
+      const logCandidates = [];
+      filtered = DATA.filter((r, i) => {
         if (status && r['vlocity_cmt__Status__c'] !== status) return false;
         if (channel && r['Sales_Channel__c'] !== channel) return false;
         if (city && r['BillingCity'] !== city) return false;
@@ -1749,17 +1780,70 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
         if (modifiedFrom && (!r['LastModifiedDate'] || r['LastModifiedDate'].slice(0, 10) < modifiedFrom)) return false;
         if (modifiedTo && (!r['LastModifiedDate'] || r['LastModifiedDate'].slice(0, 10) > modifiedTo)) return false;
         if (search) {
-          const h = r['Name'] + '\0' + r['BillingCity'] + '\0' + r['BillingPostalCode'] + '\0' + r['Id'] + '\0' + r['_source'] + '\0' + r._logSearch;
-          if (h.toLowerCase().indexOf(search) === -1) return false;
+          const small = (r['Name'] + '\0' + r['BillingCity'] + '\0' + r['BillingPostalCode'] + '\0' + r['Id'] + '\0' + r['_source'] + '\0' + r._emails).toLowerCase();
+          if (small.indexOf(search) === -1) {
+            // Non-log fields don't match. In full-log mode, queue for async log search.
+            if (fullLogIndex && r._hasLog) logCandidates.push({ dataIdx: i, byteOffset: r._byteOffset, byteLen: r._byteLen, source: r._source });
+            return false;
+          }
         }
         return true;
       });
+
+      filteredActiveCount = filtered.reduce((n, r) => n + (r['vlocity_cmt__Status__c'] === 'Active' ? 1 : 0), 0);
+      const srcSet = new Set(); for (let i = 0; i < DATA.length; i++) srcSet.add(DATA[i]._source);
+      cachedSrcCount = srcSet.size;
 
       updateAdvBtnState();
 
       sortData();
       page = 1;
       render();
+      // Kick off async log search for candidates that failed the non-log text search
+      if (fullLogIndex && search) {
+        triggerLogSearch(search, logCandidates);
+      } else {
+        if (logSearchWorker) { logSearchWorker.terminate(); logSearchWorker = null; }
+        document.getElementById('etaLbl').textContent = '';
+      }
+    }
+
+    function triggerLogSearch(search, candidates) {
+      if (logSearchWorker) { logSearchWorker.terminate(); logSearchWorker = null; }
+      const etaLbl = document.getElementById('etaLbl');
+      if (!candidates.length) { etaLbl.textContent = ''; return; }
+
+      const token = ++logSearchToken;
+      const base = filtered.slice(); // snapshot of non-log matches
+      etaLbl.textContent = 'Searching logs…';
+
+      logSearchWorker = new Worker(LOG_SEARCH_URL);
+      logSearchWorker.postMessage({ fileMap: fileStore, candidates, search });
+      logSearchWorker.onmessage = function ({ data: msg }) {
+        if (token !== logSearchToken) return; // query changed, discard
+
+        if (msg.type === 'progress') {
+          const pct = Math.round(msg.done / msg.total * 100);
+          etaLbl.textContent = 'Searching logs\u2026 ' + pct + '% (' + msg.done.toLocaleString() + ' / ' + msg.total.toLocaleString() + ')' +
+            (msg.found ? ' \u2014 ' + msg.found + ' found so far' : '');
+          return;
+        }
+
+        if (msg.type !== 'done') return;
+        logSearchWorker.terminate(); logSearchWorker = null;
+
+        const matchSet = new Set(msg.matches);
+        const extras = candidates.filter(c => matchSet.has(c.dataIdx)).map(c => DATA[c.dataIdx]);
+        if (extras.length) {
+          filtered = base.concat(extras);
+          filteredActiveCount = filtered.reduce((n, r) => n + (r['vlocity_cmt__Status__c'] === 'Active' ? 1 : 0), 0);
+          sortData(); page = 1; render();
+        }
+        etaLbl.textContent = extras.length
+          ? extras.length.toLocaleString() + ' log match' + (extras.length === 1 ? '' : 'es') + ' found'
+          : 'No matches in log fields';
+      };
+      logSearchWorker.onerror = () => { logSearchWorker = null; etaLbl.textContent = ''; };
     }
 
     // ============================================================
@@ -1773,7 +1857,10 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
     }
 
     function sortData() {
-      filtered.sort((a, b) => (a[sortCol] || '').localeCompare(b[sortCol] || '') * sortDir);
+      filtered.sort((a, b) => {
+        const av = a[sortCol] || '', bv = b[sortCol] || '';
+        return (av < bv ? -1 : av > bv ? 1 : 0) * sortDir;
+      });
     }
 
     // ============================================================
@@ -1790,8 +1877,8 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
       const start = (page - 1) * PAGE_SIZE;
       const slice = filtered.slice(start, start + PAGE_SIZE);
 
-      const active = filtered.filter(r => r['vlocity_cmt__Status__c'] === 'Active').length;
-      const srcCount = new Set(DATA.map(r => r._source)).size;
+      const active = filteredActiveCount;
+      const srcCount = cachedSrcCount;
 
       document.getElementById('liveBadge').style.display = loading ? '' : 'none';
       document.getElementById('statsContent').innerHTML =
@@ -2080,7 +2167,9 @@ self.onmessage = async function({ data: { file, sourceName, knownIds, fullLogInd
     // ============================================================
     //  Version check
     // ============================================================
-    const APP_VERSION = '1.3.0';
+    const APP_VERSION = '1.4.0';
+    document.title = 'Odido Account Dump Viewer v' + APP_VERSION;
+    document.querySelector('header h1').textContent = 'Odido Account Dump Viewer v' + APP_VERSION;
     const VERSION_URL = 'https://raw.githubusercontent.com/datasafari-org/Odidoviewer/main/version.json';
     const LS_DISMISSED = 'ov_dismissed_version';
     const LS_CHECKED = 'ov_last_checked';

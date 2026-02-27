@@ -1,4 +1,4 @@
 {
-  "version": "1.3.0",
-  "notes": "Full log search off by default — indexes first 1,000 chars of SObjectLog per record. Enable via button. Read the memory warning."
+  "version": "1.4.0",
+  "notes": "Fixed crashes on large files; full-index log search now streams from disk; email search indexed at parse time"
 }
